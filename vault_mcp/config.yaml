@@ -1,0 +1,28 @@
+name: Vault MCP
+version: "1.0.0"
+slug: vault_mcp
+description: Obsidian vault som MCP-server (Streamable HTTP) med git-synk
+url: https://github.com/bondesen/vault-mcp-addon
+arch:
+  - amd64
+startup: services
+boot: auto
+init: false
+ports:
+  8100/tcp: 8100
+ports_description:
+  8100/tcp: "MCP Streamable HTTP (auth via secret path — kun LAN!)"
+options:
+  git_url: "git@github.com:bondesen/obsidian-vault.git"
+  deploy_key: ""
+  secret_path: ""
+  sync_interval_minutes: 15
+  git_user_name: "Vault MCP (HAOS)"
+  git_user_email: "vault-mcp@haos.local"
+schema:
+  git_url: str
+  deploy_key: password
+  secret_path: password
+  sync_interval_minutes: int(5,120)
+  git_user_name: str
+  git_user_email: str
