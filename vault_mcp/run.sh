@@ -53,9 +53,8 @@ git -C /data/vault config user.email "$GIT_EMAIL"
 # ── MCP-server bag secret path ───────────────────────────────────────────────
 echo "[vault-mcp] Starter: port 8100, endpoint /<secret>/mcp, synk hvert ${SYNC_MIN}. minut"
 exec supergateway \
-  --stdio "mcpvault /data/vault" \
+  --stdio "npx -y @bitbonsai/mcpvault /data/vault" \
   --outputTransport streamableHttp \
   --port 8100 \
   --streamableHttpPath "/${SECRET_PATH}/mcp" \
-  --healthEndpoint /healthz \
   --logLevel info
