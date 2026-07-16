@@ -50,11 +50,46 @@ git -C /data/vault config user.email "$GIT_EMAIL"
   done
 ) &
 
+# ── Orphan-reaper (bagstopper mod RAM-læk) ───────────────────────────────────
+# supergateway spawner mcpvault via 'sh -c'. Skulle en mcpvault-proces blive
+# forældreløs (PPid 1) — fx hvis kill kun rammer wrapperen — dræbes den her.
+# supergateways egen cmdline indeholder også 'mcpvault', så den ekskluderes
+# eksplicit. Kører hvert 5. minut.
+(
+  while true; do
+    sleep 300
+    for status in /proc/[0-9]*/status; do
+      pid="${status#/proc/}"; pid="${pid%/status}"
+      ppid=$(sed -n 's/^PPid:[[:space:]]*//p' "$status" 2>/dev/null) || continue
+      [ "$ppid" = "1" ] || continue
+      cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+      case "$cmdline" in
+        *supergateway*) continue ;;
+        *mcpvault*)
+          echo "[vault-mcp] Reaper: dræber forældreløs mcpvault-proces $pid: $cmdline" >&2
+          kill -9 "$pid" 2>/dev/null || true
+          ;;
+      esac
+    done
+  done
+) &
+
 # ── MCP-server bag secret path ───────────────────────────────────────────────
-echo "[vault-mcp] Starter: port 8100, endpoint /<secret>/mcp, synk hvert ${SYNC_MIN}. minut"
+# VIGTIGT (RAM-læk-fix, 2026-07-16):
+# - --stateful: uden denne kører supergateway stateless og spawner en ny
+#   mcpvault-proces PR. REQUEST — de blev aldrig ryddet op → GiB-læk.
+# - --sessionTimeout: reap sessioner (og deres child-proces) efter 30 min
+#   uden aktivitet. Klienter med åben SSE-stream holdes i live.
+# - 'exec mcpvault' direkte (IKKE 'npx -y ...'): npx lagde to ekstra node-
+#   processer oven i pr. spawn, og child.kill() ramte kun sh-wrapperen.
+#   exec erstatter sh, så SIGTERM rammer selve mcpvault.
+echo "[vault-mcp] Starter: port 8100, endpoint /<secret>/mcp, synk hvert ${SYNC_MIN}. minut, stateful sessions (timeout 30 min)"
 exec supergateway \
-  --stdio "npx -y @bitbonsai/mcpvault /data/vault" \
+  --stdio "exec mcpvault /data/vault" \
   --outputTransport streamableHttp \
+  --stateful \
+  --sessionTimeout 1800000 \
   --port 8100 \
   --streamableHttpPath "/${SECRET_PATH}/mcp" \
+  --healthEndpoint /healthz \
   --logLevel info

@@ -1,5 +1,5 @@
 name: Vault MCP
-version: "1.0.0"
+version: "1.1.0"
 slug: vault_mcp
 description: Obsidian vault som MCP-server (Streamable HTTP) med git-synk
 url: https://github.com/bondesen/vault-mcp-addon
@@ -8,6 +8,7 @@ arch:
 startup: services
 boot: auto
 init: false
+watchdog: "http://[HOST]:[PORT:8100]/healthz"
 ports:
   8100/tcp: 8100
 ports_description:
