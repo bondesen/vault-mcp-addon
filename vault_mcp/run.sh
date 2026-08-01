@@ -26,22 +26,63 @@ echo "$DEPLOY_KEY_B64" | base64 -d > /data/ssh/id_vault
 chmod 600 /data/ssh/id_vault
 export GIT_SSH_COMMAND="ssh -i /data/ssh/id_vault -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/data/ssh/known_hosts"
 
+# ── Konfliktmarkør-vagt (1.1.1) ─────────────────────────────────────────────
+# BAGGRUND (1/8-2026): 'git pull --rebase --autostash' efterlader konflikt-
+# markører i arbejdstræet når autostash-pop'en fejler. Den gamle synk-løkke
+# kørte derefter 'git add -A && git commit && git push' UDEN kontrol — en
+# konflikt blev altså ikke opdaget, den blev PUBLICERET. Det skete for log.md
+# og nåede GitHub, før det blev fanget i hånden.
+#
+# Vagten scanner sporede OG usporede markdown-filer for konfliktmarkører i
+# starten af en linje. .obsidian/ udelades (plugin-kildekode indeholder
+# lovligt '>>>>>>> ' i minificeret JS, og mappen er ikke vault-indhold).
+# Findes der markører: STOP synken, larm i loggen, og rør ikke repoet igen
+# før mennesket har ryddet op. En blokeret synk er harmløs — data ligger
+# stadig på disken; en publiceret konflikt korrumperer hukommelsen.
+konflikt_filer() {
+  git -C /data/vault grep -I -l --untracked -E '^(<<<<<<< |>>>>>>> )' -- '*.md' 2>/dev/null \
+    | grep -v '^\.obsidian/' || true
+}
+
+synk_blokeret() {
+  local f
+  f=$(konflikt_filer)
+  if [ -n "$f" ]; then
+    echo "[vault-mcp] SYNK BLOKERET: konfliktmarkører fundet — committer og pusher IKKE." >&2
+    echo "$f" | sed 's/^/[vault-mcp]   /' >&2
+    echo "[vault-mcp] Ryd op i /data/vault (fjern markørerne), så genoptages synken automatisk." >&2
+    date -Iseconds > /data/SYNC-BLOCKED
+    return 0
+  fi
+  rm -f /data/SYNC-BLOCKED
+  return 1
+}
+
 # ── Klon/opdatér vault ──────────────────────────────────────────────────────
 if [ ! -d /data/vault/.git ]; then
   echo "[vault-mcp] Kloner $GIT_URL ..."
   git clone "$GIT_URL" /data/vault
 else
-  git -C /data/vault pull --rebase --autostash || echo "[vault-mcp] ADVARSEL: pull fejlede ved opstart" >&2
+  git -C /data/vault pull --rebase --autostash || {
+    echo "[vault-mcp] ADVARSEL: pull fejlede ved opstart — afbryder evt. halv rebase" >&2
+    git -C /data/vault rebase --abort 2>/dev/null || true
+  }
 fi
 git -C /data/vault config user.name "$GIT_NAME"
 git -C /data/vault config user.email "$GIT_EMAIL"
+synk_blokeret && echo "[vault-mcp] ADVARSEL: konflikt allerede til stede ved opstart — synk starter blokeret." >&2
 
 # ── Baggrunds-synk ───────────────────────────────────────────────────────────
 (
   while true; do
     sleep "$((SYNC_MIN * 60))"
     cd /data/vault || continue
-    git pull --rebase --autostash --quiet || echo "[vault-mcp] synk: pull fejlede" >&2
+    if ! git pull --rebase --autostash --quiet; then
+      echo "[vault-mcp] synk: pull/rebase fejlede — afbryder rebase og springer denne runde over" >&2
+      git rebase --abort 2>/dev/null || true
+      continue
+    fi
+    synk_blokeret && continue
     if [ -n "$(git status --porcelain)" ]; then
       git add -A
       git commit -m "auto-synk fra vault-mcp $(date +%F' '%H:%M)" --quiet || true
@@ -83,7 +124,7 @@ git -C /data/vault config user.email "$GIT_EMAIL"
 # - 'exec mcpvault' direkte (IKKE 'npx -y ...'): npx lagde to ekstra node-
 #   processer oven i pr. spawn, og child.kill() ramte kun sh-wrapperen.
 #   exec erstatter sh, så SIGTERM rammer selve mcpvault.
-echo "[vault-mcp] Starter: port 8100, endpoint /<secret>/mcp, synk hvert ${SYNC_MIN}. minut, stateful sessions (timeout 30 min)"
+echo "[vault-mcp] Starter: port 8100, endpoint /<secret>/mcp, synk hvert ${SYNC_MIN}. minut, stateful sessions (timeout 30 min), konfliktmarkør-vagt aktiv"
 exec supergateway \
   --stdio "exec mcpvault /data/vault" \
   --outputTransport streamableHttp \
