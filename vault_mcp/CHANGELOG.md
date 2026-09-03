@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.1.2 (2026-08-23)
+
+**Fix: untracked fil kunne blokere synken permanent efter genstart.**
+
+Hændelse 23/8-2026: efter genstart af addon'en fejlede opstarts-pull'et med
+
+```
+error: The following untracked working tree files would be overwritten by merge:
+	40_Areas/Coding_Hub/<note>.md
+Please move or remove them before you merge.
+```
+
+Root cause: MCP-skrivninger (`write_note`/`patch_note`) rammer disken med det
+samme, men committes først ved næste synk-cyklus. Rørte et remote-commit
+samme sti i mellemtiden (fx fra en anden skribent), nægtede git at røre
+stien overhovedet — og fordi dette ramte opstarts-pull'et (som kun kører
+én gang, i modsætning til baggrundsløkken), sad synken permanent fast uden
+retry, indtil et menneske SSH'ede ind og flyttede filen manuelt.
+
+Ændringer:
+
+- **Auto-commit før hver pull** (opstart og baggrundsløkke): `git add -A`
+  + commit af alt lokalt indhold, så stien altid er tracked når git
+  rebaser. Ingen reel kollision → stille auto-rebase. Identisk indhold →
+  "Already up to date". Reel indholdsdivergens → almindelig add/add-
+  konflikt, fanget af den eksisterende "pull fejlede → rebase --abort" i
+  løkken — springer roligt runden over og prøver igen, uden at gætte
+  hvilken side der vinder (samme designvalg som 1.1.1-vagten).
+- `-o BatchMode=yes` + `-o ConnectTimeout=10` på `GIT_SSH_COMMAND`, så en
+  SSH-prompt uden TTY fejler kontant i stedet for at hænge.
+
+Verificeret i sandkasse (bare origin + to uafhængige clones, simuleret
+kolliderende untracked fil): happy-path auto-heler stille, reel
+indholdsdivergens giver ren add/add-konflikt uden crash og uden
+konfliktmarkører tilbage på disk.
+
 ## 1.1.1 (2026-08-01)
 
 **Fix: synken publicerede konflikter i stedet for at opdage dem.**

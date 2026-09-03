@@ -24,7 +24,10 @@ case "$SECRET_PATH" in */*|*\ *) echo "[vault-mcp] FEJL: secret_path må ikke in
 mkdir -p /data/ssh
 echo "$DEPLOY_KEY_B64" | base64 -d > /data/ssh/id_vault
 chmod 600 /data/ssh/id_vault
-export GIT_SSH_COMMAND="ssh -i /data/ssh/id_vault -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/data/ssh/known_hosts"
+# BatchMode=yes (1.1.2): en SSH-prompt (host-key/auth) i en container uden TTY
+# hænger for evigt og trak historisk hele MCP-processen med sig (se hændelse-
+# 2026-08-12-noten, Fejl 3). Med BatchMode fejler den kontant i stedet.
+export GIT_SSH_COMMAND="ssh -i /data/ssh/id_vault -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/data/ssh/known_hosts -o BatchMode=yes -o ConnectTimeout=10"
 
 # ── Konfliktmarkør-vagt (1.1.1) ─────────────────────────────────────────────
 # BAGGRUND (1/8-2026): 'git pull --rebase --autostash' efterlader konflikt-
@@ -58,18 +61,53 @@ synk_blokeret() {
   return 1
 }
 
+# ── Utracked/ændret indhold før pull (1.1.2) ─────────────────────────────────
+# BAGGRUND (23/8-2026): MCP-skrivninger (write_note/patch_note) rammer disken
+# med det samme, men bliver først committet ved næste synk-cyklus. Kommer der
+# i mellemtiden et remote-commit der rører SAMME sti (fx en anden skribent på
+# .30), nægter git at pulle overhovedet:
+#
+#   error: The following untracked working tree files would be overwritten
+#   by merge. Please move or remove them before you merge.
+#
+# Fordi dette historisk kunne ramme opstarts-pull'et (som kun kører ÉN gang,
+# ikke i baggrundsløkken), sad synken permanent fast efter en genstart, uden
+# retry, indtil et menneske SSH'ede ind og flyttede filen manuelt.
+#
+# Fix: commit alt lokalt (tracked + untracked) FØR hver pull, så stien altid
+# er tracked når git rebaser. Tre udfald, alle uden manuel indgriben for at
+# holde synken kørende:
+#   - Ingen reel indholdskollision → stille, automatisk rebase/fast-forward.
+#   - Identisk indhold begge steder → "Already up to date", ingen konflikt.
+#   - Reel indholdsdivergens (to skribenter, samme sti, forskelligt indhold)
+#     → normal add/add-konflikt under rebase. Løkkens eksisterende
+#     "pull fejlede → rebase --abort" fanger den: synken springer roligt
+#     denne runde over og prøver igen om ${SYNC_MIN} minutter. Det er
+#     bevidst IKKE auto-løst — at gætte hvilken side der vinder kan smide en
+#     skrevet note væk uden spor (samme designvalg som 1.1.1-vagten ovenfor).
+#     Verificeret i sandkasse-test 23/8-2026 (se PR).
+commit_lokale_ændringer() {
+  git -C /data/vault add -A
+  if ! git -C /data/vault diff --cached --quiet; then
+    git -C /data/vault commit -m "auto-commit før synk $(date +%F' '%H:%M)" --quiet
+  fi
+}
+
 # ── Klon/opdatér vault ──────────────────────────────────────────────────────
 if [ ! -d /data/vault/.git ]; then
   echo "[vault-mcp] Kloner $GIT_URL ..."
   git clone "$GIT_URL" /data/vault
+  git -C /data/vault config user.name "$GIT_NAME"
+  git -C /data/vault config user.email "$GIT_EMAIL"
 else
+  git -C /data/vault config user.name "$GIT_NAME"
+  git -C /data/vault config user.email "$GIT_EMAIL"
+  commit_lokale_ændringer
   git -C /data/vault pull --rebase --autostash || {
     echo "[vault-mcp] ADVARSEL: pull fejlede ved opstart — afbryder evt. halv rebase" >&2
     git -C /data/vault rebase --abort 2>/dev/null || true
   }
 fi
-git -C /data/vault config user.name "$GIT_NAME"
-git -C /data/vault config user.email "$GIT_EMAIL"
 synk_blokeret && echo "[vault-mcp] ADVARSEL: konflikt allerede til stede ved opstart — synk starter blokeret." >&2
 
 # ── Baggrunds-synk ───────────────────────────────────────────────────────────
@@ -77,6 +115,7 @@ synk_blokeret && echo "[vault-mcp] ADVARSEL: konflikt allerede til stede ved ops
   while true; do
     sleep "$((SYNC_MIN * 60))"
     cd /data/vault || continue
+    commit_lokale_ændringer
     if ! git pull --rebase --autostash --quiet; then
       echo "[vault-mcp] synk: pull/rebase fejlede — afbryder rebase og springer denne runde over" >&2
       git rebase --abort 2>/dev/null || true
