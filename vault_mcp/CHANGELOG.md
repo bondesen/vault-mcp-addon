@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.3 (2026-10-03)
+
+**Fix: en indholdskonflikt med GitHub kunne stille og roligt blokere synken i ugevis.**
+Ved fejlet pull/rebase blev rebasen afbrudt og runden sprunget over — hver 15. minut, uden at
+nogen opdagede det (16/8 → 2/10-2026: 1½ måneds divergens mellem HA-kopien og GitHub).
+Nu skubbes den lokale historik desuden til grenen `ha-ikke-synket` på GitHub (+ `/data/SYNC-DIVERGED`),
+så intet kun ligger i add-on'et, og divergensen er synlig udefra. Efter manuel fletning ind i
+`main` fast-forwarder næste runde af sig selv.
+
 ## 1.1.2 (2026-08-23)
 
 **Fix: untracked fil kunne blokere synken permanent efter genstart.**

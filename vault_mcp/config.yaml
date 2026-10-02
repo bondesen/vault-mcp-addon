@@ -1,5 +1,5 @@
 name: Vault MCP
-version: "1.1.2"
+version: "1.1.3"
 slug: vault_mcp
 description: Obsidian vault som MCP-server (Streamable HTTP) med git-synk
 url: https://github.com/bondesen/vault-mcp-addon

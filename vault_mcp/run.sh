@@ -93,6 +93,22 @@ commit_lokale_ændringer() {
   fi
 }
 
+# ── Redningsgren (1.1.3, 3/10-2026) ─────────────────────────────────────────
+# Fejler pull/rebase (indholdskonflikt med GitHub), skubbes den lokale historik til
+# grenen 'ha-ikke-synket' på GitHub, så intet KUN ligger i add-on'et, og så fejlen
+# kan ses udefra (git branch -r) i stedet for kun i add-on-loggen.
+# Baggrund: 16/8 → 2/10-2026 levede HA-kopien og GitHub hver sit liv i 1½ måned,
+# fordi hver runde blot afbrød rebasen og prøvede igen 15 minutter senere.
+# Fletning sker manuelt (fx fra .30); derefter fast-forwarder næste runde af sig selv.
+skub_til_redningsgren() {
+  if git -C /data/vault push --force --quiet origin HEAD:refs/heads/ha-ikke-synket; then
+    echo "[vault-mcp] lokal historik skubbet til grenen 'ha-ikke-synket' på GitHub — skal flettes ind i main" >&2
+  else
+    echo "[vault-mcp] kunne heller ikke skubbe til grenen 'ha-ikke-synket'" >&2
+  fi
+  date -Iseconds > /data/SYNC-DIVERGED
+}
+
 # ── Klon/opdatér vault ──────────────────────────────────────────────────────
 if [ ! -d /data/vault/.git ]; then
   echo "[vault-mcp] Kloner $GIT_URL ..."
@@ -106,6 +122,7 @@ else
   git -C /data/vault pull --rebase --autostash || {
     echo "[vault-mcp] ADVARSEL: pull fejlede ved opstart — afbryder evt. halv rebase" >&2
     git -C /data/vault rebase --abort 2>/dev/null || true
+    skub_til_redningsgren
   }
 fi
 synk_blokeret && echo "[vault-mcp] ADVARSEL: konflikt allerede til stede ved opstart — synk starter blokeret." >&2
@@ -119,8 +136,10 @@ synk_blokeret && echo "[vault-mcp] ADVARSEL: konflikt allerede til stede ved ops
     if ! git pull --rebase --autostash --quiet; then
       echo "[vault-mcp] synk: pull/rebase fejlede — afbryder rebase og springer denne runde over" >&2
       git rebase --abort 2>/dev/null || true
+      skub_til_redningsgren
       continue
     fi
+    rm -f /data/SYNC-DIVERGED
     synk_blokeret && continue
     if [ -n "$(git status --porcelain)" ]; then
       git add -A
